@@ -12,3 +12,5 @@ wheels/
 # Downloaded transcripts
 transcriptions/
 .env
+
+.DS_Store
