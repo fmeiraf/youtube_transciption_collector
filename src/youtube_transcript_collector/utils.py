@@ -3,11 +3,16 @@
 import os
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.table import Table
 from youtube_transcript_api import YouTubeTranscriptApi
+
+console = Console()
 
 # Load environment variables from .env file
 load_dotenv()
@@ -224,6 +229,67 @@ def get_all_video_ids(
     return video_ids
 
 
+def get_video_metadata(
+    video_ids: List[str], api_key: str, api_delay: float = 1.0
+) -> Dict[str, Dict]:
+    """
+    Get metadata for a list of video IDs.
+    
+    Args:
+        video_ids: List of YouTube video IDs
+        api_key: YouTube Data API v3 key
+        api_delay: Delay in seconds between API requests (default: 1.0)
+    
+    Returns:
+        Dictionary mapping video_id to metadata dict with keys like:
+        - title
+        - description
+        - publishedAt
+        - channelTitle
+        - duration (if available)
+    """
+    metadata = {}
+    
+    # YouTube API allows up to 50 video IDs per request
+    batch_size = 50
+    url = "https://www.googleapis.com/youtube/v3/videos"
+    
+    for i in range(0, len(video_ids), batch_size):
+        batch = video_ids[i:i + batch_size]
+        
+        params = {
+            "part": "snippet,contentDetails,statistics",
+            "id": ",".join(batch),
+            "key": api_key,
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        # Add delay to avoid rate limiting
+        time.sleep(api_delay)
+        
+        data = response.json()
+        
+        for item in data.get("items", []):
+            video_id = item["id"]
+            snippet = item.get("snippet", {})
+            content_details = item.get("contentDetails", {})
+            statistics = item.get("statistics", {})
+            
+            metadata[video_id] = {
+                "title": snippet.get("title", "Unknown Title"),
+                "description": snippet.get("description", ""),
+                "publishedAt": snippet.get("publishedAt", ""),
+                "channelTitle": snippet.get("channelTitle", ""),
+                "duration": content_details.get("duration", ""),
+                "viewCount": statistics.get("viewCount", "0"),
+                "likeCount": statistics.get("likeCount", "0"),
+            }
+    
+    return metadata
+
+
 def download_transcript(
     video_id: str, languages: Optional[List[str]] = None
 ) -> Optional[str]:
@@ -247,15 +313,19 @@ def download_transcript(
             transcript = ytt_api.fetch(video_id)
 
         # Combine all transcript entries into a single text
-        transcript_text = "\n".join([entry["text"] for entry in transcript])
+        # FetchedTranscriptSnippet objects have .text attribute, not dictionary access
+        transcript_text = "\n".join([entry.text for entry in transcript])
         return transcript_text
     except Exception as e:
-        print(f"Error downloading transcript for video {video_id}: {e}")
+        console.print(f"[red]Error downloading transcript for video {video_id}: {e}[/red]")
         return None
 
 
 def save_transcript(
-    video_id: str, transcript_text: str, output_dir: str = "transcriptions"
+    video_id: str,
+    transcript_text: str,
+    output_dir: str = "transcriptions",
+    metadata: Optional[Dict] = None,
 ) -> Path:
     """
     Save transcript text to a markdown file.
@@ -264,6 +334,7 @@ def save_transcript(
         video_id: The YouTube video ID
         transcript_text: The transcript text to save
         output_dir: Directory to save transcripts in (default: "transcriptions")
+        metadata: Optional dictionary with video metadata (title, description, etc.)
 
     Returns:
         Path to the saved file
@@ -274,9 +345,28 @@ def save_transcript(
     file_path = output_path / f"{video_id}.md"
 
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write(f"# Transcript for Video: {video_id}\n\n")
-        f.write(f"Video URL: https://www.youtube.com/watch?v={video_id}\n\n")
+        # Use title from metadata if available, otherwise use video_id
+        title = metadata.get("title", video_id) if metadata else video_id
+        
+        f.write(f"# {title}\n\n")
+        f.write(f"**Video ID:** {video_id}\n\n")
+        f.write(f"**Video URL:** https://www.youtube.com/watch?v={video_id}\n\n")
+        
+        if metadata:
+            if metadata.get("channelTitle"):
+                f.write(f"**Channel:** {metadata['channelTitle']}\n\n")
+            if metadata.get("publishedAt"):
+                f.write(f"**Published:** {metadata['publishedAt']}\n\n")
+            if metadata.get("duration"):
+                f.write(f"**Duration:** {metadata['duration']}\n\n")
+            if metadata.get("viewCount"):
+                f.write(f"**Views:** {metadata['viewCount']}\n\n")
+            if metadata.get("description"):
+                f.write("## Description\n\n")
+                f.write(f"{metadata['description']}\n\n")
+        
         f.write("---\n\n")
+        f.write("## Transcript\n\n")
         f.write(transcript_text)
 
     return file_path
@@ -312,11 +402,16 @@ def download_channel_transcripts(
     output_path.mkdir(exist_ok=True)
 
     # Get all video IDs
-    print(f"Fetching video IDs for channel {channel_id}...")
+    console.print(f"[cyan]🔍 Fetching video IDs for channel [bold]{channel_id}[/bold]...[/cyan]")
     video_ids = get_all_video_ids(
         channel_id, api_key, max_results=max_videos, api_delay=api_delay
     )
-    print(f"Found {len(video_ids)} videos")
+    console.print(f"[green]✓ Found [bold]{len(video_ids)}[/bold] videos[/green]\n")
+
+    # Fetch video metadata
+    console.print(f"[cyan]📋 Fetching video metadata...[/cyan]")
+    video_metadata = get_video_metadata(video_ids, api_key, api_delay=api_delay)
+    console.print(f"[green]✓ Retrieved metadata for [bold]{len(video_metadata)}[/bold] videos[/green]\n")
 
     stats = {
         "total_videos": len(video_ids),
@@ -326,29 +421,83 @@ def download_channel_transcripts(
         "failed_videos": [],
     }
 
-    # Download transcripts for each video
-    for i, video_id in enumerate(video_ids, 1):
-        file_path = output_path / f"{video_id}.md"
+    # Download transcripts for each video with progress bar
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task(
+            "[cyan]Downloading transcripts...", 
+            total=len(video_ids)
+        )
 
-        # Skip if file already exists
-        if skip_existing and file_path.exists():
-            print(f"[{i}/{len(video_ids)}] Skipping {video_id} (already exists)")
-            stats["skipped"] += 1
-            continue
+        for video_id in video_ids:
+            file_path = output_path / f"{video_id}.md"
+            metadata = video_metadata.get(video_id, {})
+            video_title = metadata.get("title", video_id) if metadata else video_id
 
-        print(f"[{i}/{len(video_ids)}] Downloading transcript for {video_id}...")
-        transcript_text = download_transcript(video_id, languages=languages)
+            # Skip if file already exists
+            if skip_existing and file_path.exists():
+                progress.update(
+                    task, 
+                    description=f"[yellow]⏭  Skipping [bold]{video_title[:50]}[/bold]... (already exists)[/yellow]"
+                )
+                stats["skipped"] += 1
+                progress.advance(task)
+                continue
 
-        # Add delay after transcript download to avoid rate limiting
-        time.sleep(transcript_delay)
+            progress.update(
+                task, 
+                description=f"[cyan]📥 Downloading transcript for [bold]{video_title[:50]}[/bold]...[/cyan]"
+            )
+            transcript_text = download_transcript(video_id, languages=languages)
 
-        if transcript_text:
-            save_transcript(video_id, transcript_text, output_dir)
-            stats["downloaded"] += 1
-            print(f"  ✓ Saved transcript to {file_path}")
-        else:
-            stats["failed"] += 1
-            stats["failed_videos"].append(video_id)
-            print("  ✗ Failed to download transcript")
+            # Add delay after transcript download to avoid rate limiting
+            time.sleep(transcript_delay)
+
+            if transcript_text:
+                save_transcript(video_id, transcript_text, output_dir, metadata=metadata)
+                stats["downloaded"] += 1
+                progress.update(
+                    task,
+                    description=f"[green]✓ Saved transcript for [bold]{video_title[:50]}[/bold][/green]"
+                )
+            else:
+                stats["failed"] += 1
+                stats["failed_videos"].append(video_id)
+                progress.update(
+                    task,
+                    description=f"[red]✗ Failed to download transcript for [bold]{video_title[:50]}[/bold][/red]"
+                )
+
+            progress.advance(task)
+
+    # Print summary
+    console.print("\n")
+    summary_table = Table(title="Download Summary", show_header=True, header_style="bold magenta")
+    summary_table.add_column("Metric", style="cyan", no_wrap=True)
+    summary_table.add_column("Count", style="green", justify="right")
+    
+    summary_table.add_row("Total Videos", str(stats["total_videos"]))
+    summary_table.add_row("Downloaded", f"[green]{stats['downloaded']}[/green]")
+    summary_table.add_row("Skipped", f"[yellow]{stats['skipped']}[/yellow]")
+    summary_table.add_row("Failed", f"[red]{stats['failed']}[/red]")
+    
+    console.print(summary_table)
+    
+    if stats["failed_videos"]:
+        failed_list = []
+        for video_id in stats["failed_videos"]:
+            metadata = video_metadata.get(video_id, {})
+            title = metadata.get("title", video_id) if metadata else video_id
+            failed_list.append(f"{title} ({video_id})")
+        console.print(f"\n[red]Failed videos:[/red]")
+        for item in failed_list:
+            console.print(f"  • {item}")
 
     return stats
