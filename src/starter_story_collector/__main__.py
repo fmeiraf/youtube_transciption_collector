@@ -1,5 +1,5 @@
 """Main entry point for the starter story collector."""
-from starter_story_collector.utils import download_channel_transcripts, load_config_from_env
+from .utils import download_channel_transcripts, load_config_from_env
 
 
 def main():
@@ -46,3 +46,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -24,7 +24,6 @@ def load_config_from_env() -> Tuple[str, str]:
         ValueError: If required environment variables are not set
     """
     api_key = os.getenv("YOUTUBE_API_KEY")
-    channel_id = os.getenv("YOUTUBE_CHANNEL_ID")
 
     if not api_key:
         raise ValueError(
@@ -32,13 +31,97 @@ def load_config_from_env() -> Tuple[str, str]:
             "Please set it in your .env file or as an environment variable."
         )
 
-    if not channel_id:
-        raise ValueError(
-            "YOUTUBE_CHANNEL_ID not found in environment variables. "
-            "Please set it in your .env file or as an environment variable."
-        )
+    return api_key
 
-    return api_key, channel_id
+
+def get_channel_id(identifier: str, api_key: str, delay: float = 1.0) -> str:
+    """
+    Get channel ID from various identifier types (username, handle, URL, or channel ID).
+
+    Args:
+        identifier: Can be:
+            - Channel ID (e.g., "UC-lHJZR3Gqxm24_Vd_AJ5Yw") - returns as-is
+            - Channel handle (e.g., "@channelname" or "channelname")
+            - Channel username (e.g., "channelname")
+            - Channel URL (e.g., "https://www.youtube.com/channel/UC...")
+            - Channel custom URL (e.g., "https://www.youtube.com/c/channelname")
+        api_key: YouTube Data API v3 key
+        delay: Delay in seconds after the request (default: 1.0)
+
+    Returns:
+        The channel ID (e.g., "UC-lHJZR3Gqxm24_Vd_AJ5Yw")
+
+    Raises:
+        ValueError: If the channel cannot be found or identifier is invalid
+        requests.RequestException: If the API request fails
+    """
+    # If it's already a channel ID (starts with UC), return it
+    if identifier.startswith("UC") and len(identifier) == 24:
+        return identifier
+
+    # Extract identifier from URL if it's a URL
+    if "youtube.com" in identifier or "youtu.be" in identifier:
+        # Extract channel ID from URL like https://www.youtube.com/channel/UC...
+        if "/channel/" in identifier:
+            channel_id = identifier.split("/channel/")[-1].split("?")[0].split("/")[0]
+            if channel_id.startswith("UC") and len(channel_id) == 24:
+                return channel_id
+
+        # Extract username/handle from custom URL like https://www.youtube.com/c/channelname
+        if "/c/" in identifier:
+            username = identifier.split("/c/")[-1].split("?")[0].split("/")[0]
+            identifier = username
+        elif "/user/" in identifier:
+            username = identifier.split("/user/")[-1].split("?")[0].split("/")[0]
+            identifier = username
+        elif "/@" in identifier:
+            handle = identifier.split("/@")[-1].split("?")[0].split("/")[0]
+            identifier = f"@{handle}"
+
+    # Remove @ if present (for handles)
+    if identifier.startswith("@"):
+        handle = identifier[1:]
+    else:
+        handle = identifier
+        username = identifier
+
+    url = "https://www.googleapis.com/youtube/v3/channels"
+    params = {"part": "id", "key": api_key}
+
+    # Try handle first (newer format, e.g., @channelname)
+    if identifier.startswith("@"):
+        params["forHandle"] = handle
+    else:
+        # Try username (older format)
+        params["forUsername"] = username
+
+    response = requests.get(url, params=params)
+    response.raise_for_status()
+
+    # Add delay to avoid rate limiting
+    time.sleep(delay)
+
+    data = response.json()
+
+    if data.get("items") and len(data["items"]) > 0:
+        return data["items"][0]["id"]
+
+    # If handle didn't work, try username (or vice versa)
+    if identifier.startswith("@"):
+        # Try as username instead
+        params = {"part": "id", "key": api_key, "forUsername": handle}
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        time.sleep(delay)
+        data = response.json()
+
+        if data.get("items") and len(data["items"]) > 0:
+            return data["items"][0]["id"]
+
+    raise ValueError(
+        f"Channel not found for identifier: {identifier}. "
+        "Make sure it's a valid channel ID, handle (@channelname), username, or URL."
+    )
 
 
 def get_channel_uploads_playlist_id(
