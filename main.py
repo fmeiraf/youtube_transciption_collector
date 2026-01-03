@@ -1,5 +1,5 @@
-"""Main entry point for the starter story collector."""
-from starter_story_collector.utils import download_channel_transcripts, load_config_from_env
+"""Main entry point for the YouTube transcript collector."""
+from youtube_transcript_collector.utils import download_channel_transcripts, load_config_from_env
 
 
 def main():

@@ -1,4 +1,4 @@
-"""Starter Story Collector - A tool for downloading YouTube channel transcripts."""
+"""YouTube Transcript Collector - A tool for downloading YouTube channel transcripts."""
 
 __version__ = "0.1.0"
 

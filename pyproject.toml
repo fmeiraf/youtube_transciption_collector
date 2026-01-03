@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "starter-story-collector"
+name = "youtube-transcript-collector"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -15,12 +15,10 @@ dependencies = [
 ]
 
 [project.scripts]
-starter-story-collector = "starter_story_collector.__main__:main"
+youtube-transcript-collector = "youtube_transcript_collector.__main__:main"
 
 [tool.hatch.build]
-include = ["src/starter_story_collector"]
+include = ["src/youtube_transcript_collector"]
 
 [dependency-groups]
-dev = [
-    "ipykernel>=7.1.0",
-]
+dev = ["ipykernel>=7.1.0"]

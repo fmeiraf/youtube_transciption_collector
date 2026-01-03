@@ -1,4 +1,4 @@
-"""Main entry point for the starter story collector."""
+"""Main entry point for the YouTube transcript collector."""
 from .utils import download_channel_transcripts, load_config_from_env
 
 
